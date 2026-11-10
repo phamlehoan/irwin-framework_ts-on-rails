@@ -159,7 +159,7 @@ export type NotificationsCenterPayload = {
   generatedAt: string;
 };
 
-/** Payload dropdown navbar (giống warehouse alerts center). */
+/** Payload dropdown navbar (trung tâm thông báo). */
 export async function loadNotificationsCenterPayload(
   userId: string,
 ): Promise<NotificationsCenterPayload> {

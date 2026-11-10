@@ -1,4 +1,8 @@
-import { verifyToken } from "@lib";
+import {
+  TOKEN_TYPE_ACCESS,
+  isApiRequest as isApiRequestPath,
+  verifyTokenOfType,
+} from "@lib";
 import { NextFunction, Request, Response } from "express";
 import { ApplicationMiddleware } from "./application.middleware";
 
@@ -10,7 +14,7 @@ export class CurrentUserMiddleware extends ApplicationMiddleware {
     try {
       let userId: string | undefined;
 
-      const isApiRequest = req.originalUrl.includes("/api");
+      const isApiRequest = isApiRequestPath(req);
       if (isApiRequest) {
         const authHeader = req.headers.authorization;
         if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -20,7 +24,8 @@ export class CurrentUserMiddleware extends ApplicationMiddleware {
 
         const token = authHeader.split(" ")[1];
         try {
-          const decoded = verifyToken(token);
+          // Chỉ nhận access token: refresh / invite / password-reset token bị từ chối.
+          const decoded = verifyTokenOfType(token, TOKEN_TYPE_ACCESS);
           userId = decoded?.id;
         } catch (jwtError) {
           // Token invalid hoặc expired

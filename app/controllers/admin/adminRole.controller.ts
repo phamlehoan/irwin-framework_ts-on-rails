@@ -2,6 +2,12 @@ import { FlashType } from "@configs/enum";
 import { Prisma, User, UserToRole } from "@db";
 import models from "@models";
 import {
+  invalidateAllPermissions,
+  invalidateUserPermissions,
+  replaceRolePermissions,
+  withTransaction,
+} from "@lib/utils";
+import {
   RoleCreateValidator,
   RoleUpdateValidator,
 } from "@validators/admin.validator";
@@ -98,7 +104,9 @@ export class AdminRoleController extends AdminController {
 
     const search = String(this.req.query.search || "").trim();
     const page = Math.max(1, parseInt(String(this.req.query.page || "1"), 10));
-    const sortBy = String(this.req.query.sortBy || "accountName");
+    // Khóa sort trung tính: chỉ `name` hoặc `email`; giá trị lạ quy về `name`.
+    const rawSortBy = String(this.req.query.sortBy || "name");
+    const sortBy = rawSortBy === "email" ? "email" : "name";
     const sortOrder = String(this.req.query.sortOrder || "asc") as
       | "asc"
       | "desc";
@@ -142,9 +150,8 @@ export class AdminRoleController extends AdminController {
     assignedUsers.sort((a: User, b: User) => {
       const an = `${a.firstName || ""} ${a.lastName || ""}`.trim();
       const bn = `${b.firstName || ""} ${b.lastName || ""}`.trim();
-      if (sortBy === "accountName") return cmp(an, bn);
-      if (sortBy === "email") return cmp(a.email, b.email);
-      if (sortBy === "accountType") return cmp("User", "User");
+      if (sortBy === "name") return cmp(an, bn);
+      if (sortBy === "email") return cmp(a.email, b.email);
       return cmp(an, bn);
     });
 
@@ -157,7 +164,7 @@ export class AdminRoleController extends AdminController {
 
     const q: Record<string, string> = {};
     if (search) q.search = search;
-    if (sortBy && sortBy !== "accountName") q.sortBy = sortBy;
+    if (sortBy !== "name") q.sortBy = sortBy;
     if (sortOrder && sortOrder !== "asc") q.sortOrder = sortOrder;
     if (filterStatus) q.filterStatus = filterStatus;
     if (perPage !== DEFAULT_PER_PAGE) q.perPage = String(perPage);
@@ -264,15 +271,18 @@ export class AdminRoleController extends AdminController {
     });
     if (!role) throw new NotFoundError("Role not found");
 
-    for (const userId of userIds) {
-      await models.userToRole.upsert({
-        where: {
-          userId_roleId: { userId, roleId },
-        },
-        create: { userId, roleId },
-        update: {},
-      });
-    }
+    await withTransaction(async (tx) => {
+      for (const userId of userIds) {
+        await tx.userToRole.upsert({
+          where: {
+            userId_roleId: { userId, roleId },
+          },
+          create: { userId, roleId },
+          update: {},
+        });
+      }
+    });
+    invalidateAllPermissions();
 
     this.flash(FlashType.Success, {
       msg: this.t("flash.users_assigned", { count: userIds.length }),
@@ -285,6 +295,7 @@ export class AdminRoleController extends AdminController {
     await models.userToRole.deleteMany({
       where: { userId, roleId },
     });
+    invalidateUserPermissions(userId);
     this.flash(FlashType.Success, { msg: this.t("flash.user_unassigned") });
     this.redirect(`/admin/roles/${roleId}`);
   }
@@ -342,6 +353,7 @@ export class AdminRoleController extends AdminController {
         return this.redirect(`/admin/roles/${id}`);
       }
       await models.role.update({ where: { id }, data: updateData });
+      invalidateAllPermissions();
     }
 
     if (hasPermissionIds) {
@@ -350,12 +362,11 @@ export class AdminRoleController extends AdminController {
         : permissionIds
           ? [permissionIds]
           : [];
-      await models.roleToPermission.deleteMany({ where: { roleId: id } });
-      for (const permissionId of permissionIdsArr) {
-        await models.roleToPermission.create({
-          data: { roleId: id, permissionId },
-        });
-      }
+      // IRW-FIX-059: thay quyền của role trong transaction.
+      await withTransaction((tx) =>
+        replaceRolePermissions(tx, id, permissionIdsArr),
+      );
+      invalidateAllPermissions();
     }
 
     this.flash(FlashType.Success, { msg: this.t("flash.role_updated") });
@@ -413,6 +424,7 @@ export class AdminRoleController extends AdminController {
       where: { id },
       data: { deleted: true },
     });
+    invalidateAllPermissions();
 
     this.flash(FlashType.Success, { msg: this.t("flash.role_deleted") });
     this.redirect("/admin/roles");

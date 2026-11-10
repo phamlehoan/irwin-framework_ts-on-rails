@@ -1,5 +1,10 @@
 import env from "@configs/env";
-import { generateToken } from "@lib";
+import {
+  generateAccessToken,
+  issueRefreshToken,
+  normalizeEmail,
+  registrationEnabled,
+} from "@lib";
 import models, { UserStatus } from "@models";
 import { OAuth2Client } from "google-auth-library";
 import { UnauthorizedError } from "ts-rails";
@@ -33,13 +38,19 @@ export class AuthGoogleVerifyService extends ApplicationService {
       throw new UnauthorizedError("Email not verified by Google");
     }
 
-    const { email, given_name, family_name, picture, sub } = payload;
+    const { given_name, family_name, picture, sub } = payload;
+    const email = normalizeEmail(payload.email);
+    if (!email) throw new UnauthorizedError("Invalid ID token");
 
     let user = await this.models.user.findUnique({
-      where: { email: email! },
+      where: { email },
       include: { roles: { include: { role: true } } }, // Include roles để trả về thông tin đầy đủ
     });
 
+    // IRW-FIX-054: tài khoản đã xóa mềm không được đăng nhập lại (và email unique chặn tạo mới).
+    if (user && user.deleted) {
+      throw new UnauthorizedError("Invalid ID token");
+    }
     if (user && user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedError(
         "This account is not active yet. Please complete activation from your invitation email.",
@@ -47,17 +58,29 @@ export class AuthGoogleVerifyService extends ApplicationService {
     }
 
     if (!user) {
+      if (!registrationEnabled()) {
+        throw new UnauthorizedError("Sign-up is disabled.");
+      }
+      // Vai trò mặc định cho người đăng ký bằng Google do cấu hình quyết định (không còn hằng cứng
+      // trỏ tới một vai trò mà seed đã xóa). Bỏ trống = không gán vai trò.
+      const defaultRole = (process.env.GOOGLE_SIGNUP_ROLE || "").trim();
+      const roleConnect = defaultRole
+        ? await this.models.role.findFirst({
+            where: { code: defaultRole, deleted: false },
+            select: { code: true },
+          })
+        : null;
       user = await this.models.user.create({
         data: {
-          email: email!,
+          email,
           firstName: given_name || "",
           lastName: family_name || "",
           avatarUrl: picture || "",
           status: "ACTIVE",
           googleId: sub,
-          roles: {
-            create: [{ role: { connect: { code: "WORKER" } } }],
-          },
+          ...(roleConnect
+            ? { roles: { create: [{ role: { connect: { code: roleConnect.code } } }] } }
+            : {}),
         },
         include: { roles: { include: { role: true } } },
       });
@@ -81,7 +104,7 @@ export class AuthGoogleVerifyService extends ApplicationService {
       (r: { role: { code: string } }) => r.role.code,
     );
 
-    const accessToken = generateToken(
+    const accessToken = generateAccessToken(
       {
         id: user.id,
         roles: userRoles,
@@ -89,31 +112,8 @@ export class AuthGoogleVerifyService extends ApplicationService {
       "1h",
     ); // Thời gian ngắn
 
-    const refreshToken = generateToken(
-      {
-        id: user.id,
-      },
-      "7d",
-    ); // Thời gian dài
-
-    // 2. Lưu RefreshToken vào Database nếu anh muốn quản lý Logout/Revoke
-    await this.models.$transaction([
-      // Xóa các Refresh Token cũ của user này để dọn dẹp (Optional nhưng nên làm)
-      this.models.password.deleteMany({
-        where: {
-          userId: user.id,
-          type: "REFRESH_TOKEN",
-        },
-      }),
-      // Lưu token mới
-      this.models.password.create({
-        data: {
-          userId: user.id,
-          password: refreshToken, // Lưu token vào field password
-          type: "REFRESH_TOKEN",
-        },
-      }),
-    ]);
+    // 2. Refresh token lưu dạng băm, nhiều thiết bị (IRW-FIX-056).
+    const refreshToken = await issueRefreshToken(user.id);
 
     return {
       accessToken,

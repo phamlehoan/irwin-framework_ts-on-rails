@@ -33,11 +33,11 @@ Irwin Framework is a powerful, convention-over-configuration Node.js framework i
 Stop writing manual code. Use the CLI to generate everything:
 | Command | Action |
 | :--- | :--- |
-| `yarn g:scaffold [Name]` | Full CRUD (Model, Controller, Service, Route, View) |
-| `yarn g:controller [Name]` | Generates a new Controller |
-| `yarn g:service [Name]` | Generates a Service Object for business logic |
-| `yarn g:job [Name]` | Generates a Background Job (BullMQ/Lambda) |
-| `yarn g:resource [Name]` | Generates Resourceful Route (API + UI) |
+| `pnpm exec rails generate scaffold [Name]` | Full CRUD (Model, Controller, Service, Route, View) |
+| `pnpm exec rails generate controller [Name]` | Generates a new Controller |
+| `pnpm exec rails generate service [Name]` | Generates a Service Object for business logic |
+| `pnpm exec rails generate job [Name]` | Generates a Background Job (BullMQ/Lambda) |
+| `pnpm exec rails generate resource [Name]` | Generates Resourceful Route (API + UI) |
 
 ### 🛣 Resourceful Routing & Auto Swagger
 
@@ -66,8 +66,8 @@ this.resource("/users", UsersController, {
 ボイラープレートの作成を自動化します：
 | コマンド | 機能 |
 | :--- | :--- |
-| `yarn g:scaffold [Name]` | モデル、コントローラー、サービス、ルート、ビューをフルセットで生成 |
-| `yarn g:resource [Name]` | Swaggerドキュメント付きのAPIリソースを生成 |
+| `pnpm exec rails generate scaffold [Name]` | モデル、コントローラー、サービス、ルート、ビューをフルセットで生成 |
+| `pnpm exec rails generate resource [Name]` | Swaggerドキュメント付きのAPIリソースを生成 |
 
 ### 🛣 リソースルーティング
 
@@ -96,9 +96,9 @@ this.resource("/users", UsersController, {
 Đừng viết code thủ công, hãy để framework làm việc đó cho bạn:
 | Lệnh | Chức năng |
 | :--- | :--- |
-| `yarn g:scaffold [Name]` | Tạo trọn bộ: Model, Controller, Service, Route, View |
-| `yarn g:job [Name]` | Tạo Background Job (BullMQ/Lambda) |
-| `yarn g:resource [Name]` | Tạo Resourceful Route (API + UI) |
+| `pnpm exec rails generate scaffold [Name]` | Tạo trọn bộ: Model, Controller, Service, Route, View |
+| `pnpm exec rails generate job [Name]` | Tạo Background Job (BullMQ/Lambda) |
+| `pnpm exec rails generate resource [Name]` | Tạo Resourceful Route (API + UI) |
 
 ---
 
@@ -107,21 +107,21 @@ this.resource("/users", UsersController, {
 ### 1. Environment Setup
 
 ```bash
-yarn install
+pnpm install
 cp .env.example .env
 ```
 
 ### 2. Database & Seeds
 
 ```bash
-yarn db:migrate
-yarn db:seed
+pnpm db:migrate
+pnpm db:seed
 ```
 
 ### 3. Development
 
 ```bash
-yarn dev
+pnpm dev
 ```
 
 - App URL: `http://localhost:8000`
@@ -199,5 +199,5 @@ REDIS_PORT=6379
 Built-in support for **Serverless Framework**:
 
 ```bash
-yarn serverless
+pnpm serverless
 ```

@@ -1,3 +1,4 @@
+import { isApiRequest } from "@lib/utils/http";
 import { ApiResponse, AppError } from "ts-rails";
 import type { ApplicationController } from "../application.controller";
 
@@ -11,7 +12,7 @@ export const Rescuable = {
    */
   rescueAppError(this: ApplicationController, err: unknown): boolean {
     if (err instanceof AppError) {
-      const isApi = this.req.originalUrl?.includes("/api");
+      const isApi = isApiRequest(this.req);
       if (isApi) {
         this.res
           .status(err.statusCode)

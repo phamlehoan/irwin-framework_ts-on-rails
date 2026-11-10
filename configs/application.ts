@@ -20,6 +20,10 @@ import {
 import { initializeHash } from "./initializers/hash";
 import { setupJobWorkers } from "@lib/jobs/setupWorkers";
 import {
+  buildCorsOptions,
+  csrfGuardMiddleware,
+  parseTrustProxy,
+  securityHeadersMiddleware,
   i18nMiddleware,
   initI18n,
   rateLimitMiddleware,
@@ -77,6 +81,11 @@ export class Application extends RailsApplication {
     if (!RailsApplication.middlewareFactory) {
       throw new Error("RailsApplication.middlewareFactory has not been configured.");
     }
+    // IRW-FIX-058: IP thật phía sau proxy/LB (rate limit theo IP cần giá trị này đúng).
+    const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+    if (trustProxy !== undefined) this.app.set("trust proxy", trustProxy);
+    // IRW-FIX-053: header bảo mật cho mọi response.
+    this.app.use(securityHeadersMiddleware());
     this.app.use(RailsApplication.middlewareFactory.requestId());
     this.app.use(RailsApplication.middlewareFactory.requestLogging());
     this.app.use(express.json({ limit: "12mb" }));
@@ -120,12 +129,10 @@ export class Application extends RailsApplication {
   }
 
   protected setupAppMiddlewares() {
-    this.app.use(
-      cors({
-        origin: process.env.CORS_ORIGIN || true,
-        credentials: true,
-      }),
-    );
+    // IRW-FIX-053: CORS theo danh sách; không còn `origin:true`+credentials khi thiếu CORS_ORIGIN ở production.
+    this.app.use(cors(buildCorsOptions()));
+    // IRW-FIX-053: chặn CSRF cho form dùng cookie session (Origin/Referer phải cùng host).
+    this.app.use(csrfGuardMiddleware());
 
     const sessionMiddleware = initializeSession();
 

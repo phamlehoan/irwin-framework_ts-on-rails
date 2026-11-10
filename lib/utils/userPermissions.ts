@@ -1,4 +1,8 @@
 import models from "@models";
+import {
+  getCachedPermissions,
+  setCachedPermissions,
+} from "../security/permissionCache";
 
 /**
  * ts-rails `resource` API gắn middleware với mã kiểu `FEATURE::Read` (Pascal một phần),
@@ -20,6 +24,15 @@ export function canonPermissionString(code: string): string {
 export async function getMergedPermissionStrings(
   userId: string,
 ): Promise<string[]> {
+  // IRW-FIX-064: cache TTL ngắn, vô hiệu khi đổi vai trò/quyền (xem permissionCache).
+  const cached = getCachedPermissions(userId);
+  if (cached) return cached;
+  const fresh = await loadMergedPermissionStrings(userId);
+  setCachedPermissions(userId, fresh);
+  return fresh;
+}
+
+async function loadMergedPermissionStrings(userId: string): Promise<string[]> {
   const permissionFeaturesFromRoles = await models.feature.findMany({
     where: {
       deleted: false,

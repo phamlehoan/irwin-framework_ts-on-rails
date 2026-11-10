@@ -1,5 +1,5 @@
 import { PasswordType, UserStatus } from "@models";
-import { generateToken } from "@lib";
+import { generateAccessToken, issueRefreshToken, normalizeEmail } from "@lib";
 import models from "@models";
 import { Prisma } from "@db";
 import { UnauthorizedError } from "ts-rails";
@@ -17,7 +17,7 @@ export class AuthLoginService extends ApplicationService {
     refreshToken: string;
     user: Record<string, unknown>;
   }> {
-    const normalized = email.trim().toLowerCase();
+    const normalized = normalizeEmail(email);
     const user = await this.models.user.findFirst({
       where: {
         email: normalized,
@@ -59,24 +59,12 @@ export class AuthLoginService extends ApplicationService {
       (r: { role: { code: string } }) => r.role.code,
     );
 
-    const accessToken = generateToken(
+    const accessToken = generateAccessToken(
       { id: userWithRoles.id, roles: userRoles },
       "1h",
     );
-    const refreshToken = generateToken({ id: userWithRoles.id }, "7d");
-
-    await this.models.$transaction([
-      this.models.password.deleteMany({
-        where: { userId: userWithRoles.id, type: PasswordType.REFRESH_TOKEN },
-      }),
-      this.models.password.create({
-        data: {
-          userId: userWithRoles.id,
-          password: refreshToken,
-          type: PasswordType.REFRESH_TOKEN,
-        },
-      }),
-    ]);
+    // IRW-FIX-056: refresh token lưu dạng băm, nhiều thiết bị.
+    const refreshToken = await issueRefreshToken(userWithRoles.id);
 
     const u = userWithRoles;
     return {

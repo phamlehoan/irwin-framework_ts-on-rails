@@ -1,5 +1,11 @@
 import models from "@models";
 import {
+  invalidateAllPermissions,
+  invalidateUserPermissions,
+  replaceRolePermissions,
+  withTransaction,
+} from "@lib/utils";
+import {
   RoleCreateValidator,
   RoleUpdateValidator,
 } from "@validators/admin.validator";
@@ -119,13 +125,11 @@ export class ApiV1AdminRoleController extends ApiV1Controller {
     });
 
     if (permissionIdsArr !== undefined) {
-      await models.roleToPermission.deleteMany({ where: { roleId: id } });
-      for (const permissionId of permissionIdsArr) {
-        await models.roleToPermission.create({
-          data: { roleId: id, permissionId },
-        });
-      }
+      await withTransaction((tx) =>
+        replaceRolePermissions(tx, id, permissionIdsArr),
+      );
     }
+    invalidateAllPermissions();
 
     const updated = await models.role.findFirst({
       where: { id },
@@ -161,6 +165,7 @@ export class ApiV1AdminRoleController extends ApiV1Controller {
           data: { deleted: true },
         }),
       ]);
+      invalidateAllPermissions();
     } catch (e) {
       const msg =
         e instanceof Error ? e.message : "Failed to delete role (constraints)";
@@ -189,12 +194,15 @@ export class ApiV1AdminRoleController extends ApiV1Controller {
     if (!role) throw new NotFoundError("Role not found");
 
     /** Thay thế toàn bộ danh sách gán (khớp multiselect + lưu). */
-    await models.userToRole.deleteMany({ where: { roleId } });
-    for (const userId of userIds) {
-      await models.userToRole.create({
-        data: { userId, roleId },
-      });
-    }
+    await withTransaction(async (tx) => {
+      await tx.userToRole.deleteMany({ where: { roleId } });
+      if (userIds.length) {
+        await tx.userToRole.createMany({
+          data: userIds.map((userId) => ({ userId, roleId })),
+        });
+      }
+    });
+    invalidateAllPermissions();
     const usersInRole = await models.userToRole.findMany({
       where: { roleId },
       include: {
@@ -218,6 +226,7 @@ export class ApiV1AdminRoleController extends ApiV1Controller {
     await models.userToRole.deleteMany({
       where: { userId, roleId },
     });
+    invalidateUserPermissions(userId);
     this.renderJson({ ok: true });
   }
 }

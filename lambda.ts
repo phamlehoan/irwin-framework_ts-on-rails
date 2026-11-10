@@ -4,40 +4,41 @@ import { execSync } from "child_process";
 import serverless from "serverless-http";
 import application from "./configs/application";
 
-let cachedHandler: serverless.Handler;
+let cachedHandler: serverless.Handler | undefined;
+let initialized: Promise<void> | undefined;
+
+type JobClass = { new (): { perform: (...args: unknown[]) => Promise<unknown> } };
+
+/** Sự kiện EventBridge/CloudWatch có thể đến ở BẤT KỲ lần gọi nào, không chỉ cold start (IRW-FIX-062). */
+function isScheduledEvent(event: Record<string, unknown>): boolean {
+  return event.source === "aws.events" || event["detail-type"] === "Scheduled Event";
+}
 
 export const handler = async (
   event: APIGatewayProxyEvent | Record<string, unknown>,
   context: Context,
 ) => {
-  if (!cachedHandler) {
-    await application.initialize();
+  initialized ??= application.initialize();
+  await initialized;
 
-    // Hỗ trợ trigger từ EventBridge (CloudWatch Events)
-    const eventAny = event as Record<string, unknown>;
-    if (
-      eventAny.source === "aws.events" ||
-      eventAny["detail-type"] === "Scheduled Event"
-    ) {
-      const jobClassName = (eventAny.job ||
-        (eventAny.detail as Record<string, string>)?.job) as string;
-      // Định nghĩa kiểu cho jobMap để tránh dùng any
-      const jobMap = jobs as unknown as Record<string, unknown>;
-      const JobClass = jobMap[jobClassName] as
-        | { new (): { perform: (...args: unknown[]) => Promise<unknown> } }
-        | undefined;
-
-      if (JobClass) {
-        const args = (eventAny.args as unknown[]) || [];
-        return await new JobClass().perform(...args);
-      }
+  const eventAny = event as Record<string, unknown>;
+  if (isScheduledEvent(eventAny)) {
+    const jobClassName = (eventAny.job ||
+      (eventAny.detail as Record<string, string> | undefined)?.job) as string;
+    const jobMap = jobs as unknown as Record<string, unknown>;
+    const JobClass = jobMap[jobClassName] as JobClass | undefined;
+    if (!JobClass) {
+      console.error("[lambda] Unknown scheduled job:", jobClassName);
+      return { statusCode: 400, body: "Unknown job" };
     }
-
-    // Cấu hình serverless-http để Express có thể hiểu được event từ Gateway
-    cachedHandler = serverless(application.app, {
-      binary: ["image/*", "font/*", "application/pdf"], // Hỗ trợ trả về file binary nếu cần
-    });
+    const args = (eventAny.args as unknown[]) || [];
+    return await new JobClass().perform(...args);
   }
+
+  // Cấu hình serverless-http để Express hiểu event từ API Gateway.
+  cachedHandler ??= serverless(application.app, {
+    binary: ["image/*", "font/*", "application/pdf"],
+  });
 
   // Ngăn Lambda kết thúc trước khi các async tasks trong event loop hoàn tất (nếu có)
   context.callbackWaitsForEmptyEventLoop = false;

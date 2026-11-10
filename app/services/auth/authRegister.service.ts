@@ -1,4 +1,6 @@
 import { isMailDeliveryConfigured } from "@lib/utils/mailConfig";
+import { normalizeEmail, registrationEnabled } from "@lib/utils/email";
+import { validatePassword } from "@lib/utils/passwordPolicy";
 import { PasswordType, UserStatus } from "@models";
 import {
   buildActivateAccountUrl,
@@ -51,13 +53,37 @@ async function sendAccountInviteEmail(
 
 export class AuthRegisterService extends ApplicationService {
   async execute(input: RegisterUserInput): Promise<RegisterUserResult> {
-    const email = input.email.trim().toLowerCase();
+    // IRW-FIX-057: cờ tắt đăng ký công khai; email chuẩn hóa một nơi; chính sách mật khẩu một nơi.
+    if (!registrationEnabled()) {
+      throw new UnprocessableEntityError("REGISTRATION_DISABLED");
+    }
+    const email = normalizeEmail(input.email);
     const activationRequired = isMailDeliveryConfigured();
+    if (input.password?.trim()) {
+      const problem = validatePassword(input.password);
+      if (problem) throw new UnprocessableEntityError(problem);
+    }
 
     const existing = await this.models.user.findFirst({
       where: { email, deleted: false },
     });
     if (existing) {
+      // REGISTER_NEUTRAL_RESPONSE=true: không lộ email đã tồn tại (phản hồi giống đăng ký thành công chờ kích hoạt).
+      if (process.env.REGISTER_NEUTRAL_RESPONSE === "true") {
+        return {
+          user: {
+            id: "",
+            email,
+            firstName: input.firstName.trim(),
+            lastName: input.lastName.trim(),
+            middleName: input.middleName?.trim() || null,
+            status: UserStatus.PENDING,
+          },
+          status: UserStatus.PENDING,
+          activationRequired: true,
+          emailSent: false,
+        };
+      }
       throw new UnprocessableEntityError("REGISTRATION_EMAIL_EXISTS");
     }
 

@@ -1,3 +1,4 @@
+import { passwordMinLength } from "@lib/utils/passwordPolicy";
 import {
   IsEmail,
   IsNotEmpty,
@@ -31,24 +32,26 @@ export class RegisterUserValidator {
   /** Bắt buộc khi không có mail — validate thêm trong AuthRegisterService. */
   @IsOptional()
   @IsString()
-  @MinLength(6, { message: "Password must be at least 6 characters" })
+  @MinLength(passwordMinLength(), {
+    message: "Password must be at least 8 characters",
+  })
   password?: string;
 
   @IsOptional()
   @IsString()
-  @MinLength(6)
   passwordConfirmation?: string;
 }
 
 export class RegisterApiValidator extends RegisterUserValidator {
   @IsNotEmpty({ message: "Password is required" })
   @IsString()
-  @MinLength(6, { message: "Password must be at least 6 characters" })
+  @MinLength(passwordMinLength(), {
+    message: "Password must be at least 8 characters",
+  })
   override password!: string;
 
   @IsNotEmpty({ message: "Password confirmation is required" })
   @IsString()
-  @MinLength(6)
   override passwordConfirmation!: string;
 }
 
@@ -72,7 +75,9 @@ export class CreatePasswordValidator {
 export class UpdatePasswordValidator {
   @IsNotEmpty({ message: "Password is required" })
   @IsString()
-  @MinLength(6, { message: "Password must be at least 6 characters" })
+  @MinLength(passwordMinLength(), {
+    message: "Password must be at least 8 characters",
+  })
   password!: string;
 
   @IsNotEmpty({ message: "Password confirmation is required" })
@@ -123,7 +128,9 @@ export class InviteAcceptValidator {
 
   @IsNotEmpty()
   @IsString()
-  @MinLength(8, { message: "Password must be at least 8 characters" })
+  @MinLength(passwordMinLength(), {
+    message: "Password must be at least 8 characters",
+  })
   password!: string;
 
   @IsNotEmpty()
@@ -192,7 +199,9 @@ export class ChangeMyPasswordValidator {
 
   @IsNotEmpty()
   @IsString()
-  @MinLength(8, { message: "New password must be at least 8 characters" })
+  @MinLength(passwordMinLength(), {
+    message: "New password must be at least 8 characters",
+  })
   newPassword!: string;
 
   @IsNotEmpty()

@@ -65,9 +65,9 @@ block content
               thead
                 tr
                   th
-                    a.text-decoration-none(href=buildSortUrl('accountName'))
+                    a.text-decoration-none(href=buildSortUrl('name'))
                       | Account Name
-                      if sortBy === 'accountName'
+                      if sortBy === 'name'
                         i.fa.ms-1(class=sortOrder==='desc'?'fa-sort-desc':'fa-sort-asc' style="opacity:0.7")
                   th
                     a.text-decoration-none(href=buildSortUrl('email'))

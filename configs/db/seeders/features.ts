@@ -111,17 +111,24 @@ async function pruneRolesExceptAdmin(): Promise<void> {
   }
 }
 
+/**
+ * Seed cộng dồn và idempotent (IRW-FIX-051): chỉ thêm/cập nhật, KHÔNG xóa mềm role/feature/permission
+ * mà người dùng đã tạo. Hành vi dọn cũ chỉ chạy khi `SEED_PRUNE=true` (không khuyến nghị).
+ */
 export async function seedFeatures() {
   for (const def of FEATURES) {
     await registerFeature(def);
   }
   await setFeatureParents(FEATURES);
 
-  await pruneFeaturesNotOnRoutes();
-  await prunePermissionsNotOnRoutes();
+  const prune = process.env.SEED_PRUNE === "true";
+  if (prune) {
+    await pruneFeaturesNotOnRoutes();
+    await prunePermissionsNotOnRoutes();
+  }
 
   await ensureRole("ADMIN", "Administrator", "Full administrative access");
-  await pruneRolesExceptAdmin();
+  if (prune) await pruneRolesExceptAdmin();
 
   await assignAllPermissionsToRole("ADMIN");
 

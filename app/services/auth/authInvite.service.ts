@@ -1,7 +1,9 @@
 import env from "@configs/env";
-import { generateToken, verifyToken } from "@lib";
+import { validatePassword } from "@lib/utils/passwordPolicy";
+import { generateToken, newJti, verifyToken } from "@lib";
 import { PasswordType, UserStatus } from "@models";
 import {
+  AppError,
   Security,
   UnauthorizedError,
   UnprocessableEntityError,
@@ -19,10 +21,15 @@ export function buildActivateAccountUrl(token: string): string {
   return `${base}/activate-account?token=${enc}`;
 }
 
+/** Hạn link mời (IRW-FIX-056): mặc định 72h thay vì 7 ngày; đổi bằng `INVITE_TTL` (vd "7d"). */
+export function inviteTtl(): string {
+  return process.env.INVITE_TTL?.trim() || "72h";
+}
+
 export function generateInviteToken(userId: string): string {
   return generateToken(
-    { id: userId, purpose: INVITE_TOKEN_PURPOSE },
-    "7d",
+    { id: userId, purpose: INVITE_TOKEN_PURPOSE, jti: newJti() },
+    inviteTtl(),
   );
 }
 
@@ -68,6 +75,8 @@ export class AuthInviteService extends ApplicationService {
     if (password !== passwordConfirmation) {
       throw new UnprocessableEntityError("Passwords do not match.");
     }
+    const pwProblem = validatePassword(password);
+    if (pwProblem) throw new UnprocessableEntityError(pwProblem);
     const userId = this.verifyInviteJwt(token);
     const user = await this.models.user.findFirst({
       where: { id: userId, deleted: false },
@@ -77,9 +86,9 @@ export class AuthInviteService extends ApplicationService {
     }
     if (user.status !== UserStatus.PENDING) {
       if (user.status === UserStatus.ACTIVE) {
-        throw new UnprocessableEntityError(
-          "Account is already active. Please sign in.",
-        );
+        // Link mời chỉ dùng một lần: dùng lại -> 410 Gone (IRW-FIX-056). INVITE_REUSE_STATUS=422 để giữ mã cũ.
+        const reuseStatus = process.env.INVITE_REUSE_STATUS === "422" ? 422 : 410;
+        throw new AppError("Account is already active. Please sign in.", reuseStatus);
       }
       throw new UnprocessableEntityError(
         "This account cannot be activated with this link.",

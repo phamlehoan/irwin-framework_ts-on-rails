@@ -104,7 +104,7 @@ export class CloudinaryStorageAdapter implements StorageAdapter {
     return new Promise((resolve, reject) => {
       cloudinary.uploader
         .upload_stream(
-          { folder: "task-activities", resource_type: "image", format: "jpg" },
+          { folder: process.env.CLOUDINARY_UPLOAD_FOLDER || "uploads", resource_type: "image", format: "jpg" },
           (error, result) => {
             if (error || !result)
               return reject(new Error("Cloudinary upload failed"));
@@ -124,21 +124,21 @@ export class SupabaseStorageAdapter implements StorageAdapter {
 
   async upload(
     file: Express.Multer.File,
-    bucket: string = "task-attachments",
+    bucket: string = process.env.SUPABASE_BUCKET || "attachments",
   ): Promise<string | null> {
     const resizedImage = await resizeToJpegBuffer(file.buffer);
 
     const fileName = `${Date.now()}_${path.basename(file.originalname, path.extname(file.originalname))}.jpg`;
     const { error } = await this.supabase.storage
       .from(bucket)
-      .upload(`tasks/${fileName}`, resizedImage, {
+      .upload(`uploads/${fileName}`, resizedImage, {
         contentType: "image/jpeg",
         upsert: true,
       });
 
     if (error) throw new Error(`Supabase upload failed: ${error.message}`);
     return (
-      this.supabase.storage.from(bucket).getPublicUrl(`tasks/${fileName}`).data
+      this.supabase.storage.from(bucket).getPublicUrl(`uploads/${fileName}`).data
         ?.publicUrl || null
     );
   }

@@ -28,5 +28,5 @@ package:
   individually: true
   patterns:
     - "prisma/**" # Đảm bảo schema prisma được đóng gói để chạy migration
-    - "!node_modules/.prisma/client/railsquery_engine-*" # Loại bỏ engine thừa để giảm dung lượng
-    - "node_modules/.prisma/client/railsquery_engine-rhel-*" # Chỉ giữ lại engine cho Linux khi deploy
+    - "!node_modules/.prisma/client/query_engine-*" # Loại bỏ engine thừa để giảm dung lượng (tên thật của Prisma: query_engine-*)
+    - "node_modules/.prisma/client/query_engine-rhel-*" # Chỉ giữ lại engine cho Linux khi deploy

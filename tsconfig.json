@@ -23,7 +23,7 @@
     // "useDefineForClassFields": true,                  /* Emit ECMAScript-standard-compliant class fields. */
     // "moduleDetection": "auto",                        /* Control what method is used to detect module-format JS files. */
     /* Modules */
-    "module": "CommonJS" /* CJS — Node `pnpm start` không cần `.js` trên import tương đối (giống warehouse). */,
+    "module": "CommonJS" /* CJS — Node `pnpm start` không cần `.js` trên import tương đối. */,
     "moduleResolution": "node10",
     "rootDir": "./" /* Specify the root folder within your source files. */,
     "paths": {

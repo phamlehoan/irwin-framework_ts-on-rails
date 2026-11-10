@@ -1,10 +1,18 @@
 import { UserMailer } from "@mailers/user.mailer";
 import models from "@models";
 import {
+  invalidateUserPermissions,
+  normalizeEmail,
+  replaceUserPermissions,
+  replaceUserRoles,
+  revokeUserSessions,
+  withTransaction,
+} from "@lib/utils";
+import {
   buildActivateAccountUrl,
   buildResetPasswordUrl,
   generateInviteToken,
-  generatePasswordResetToken,
+  issuePasswordResetToken,
 } from "@services";
 import {
   CreateUserValidator,
@@ -76,7 +84,7 @@ export class ApiV1AdminUserController extends ApiV1Controller {
       data: {
         firstName: firstName || "",
         lastName: lastName || "",
-        email: email || "",
+        email: normalizeEmail(email),
         status: "PENDING",
         roles: {
           create: roleIdsArr.map((roleId: string) => ({
@@ -115,7 +123,7 @@ export class ApiV1AdminUserController extends ApiV1Controller {
     if (!user) throw new NotFoundError("User not found");
 
     try {
-      const token = generatePasswordResetToken(user.id);
+      const token = await issuePasswordResetToken(user.id);
       const resetLink = buildResetPasswordUrl(token);
       await UserMailer.passwordReset(user.email, resetLink);
     } catch (err) {
@@ -156,29 +164,24 @@ export class ApiV1AdminUserController extends ApiV1Controller {
         ? [permissionIds]
         : [];
 
-    await models.user.update({
-      where: { id },
-      data: {
-        ...(firstName && { firstName }),
-        ...(lastName && { lastName }),
-        ...(email && { email }),
-        ...(status && { status }),
-      },
+    // IRW-FIX-059: một transaction cho cả hồ sơ, vai trò và quyền trực tiếp.
+    await withTransaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: {
+          ...(firstName && { firstName }),
+          ...(lastName && { lastName }),
+          ...(email && { email: normalizeEmail(email) }),
+          ...(status && { status }),
+        },
+      });
+      await replaceUserRoles(tx, id, roleIdsArr);
+      await replaceUserPermissions(tx, id, permissionIdsArr);
     });
 
-    await models.userToRole.deleteMany({ where: { userId: id } });
-    for (const roleId of roleIdsArr) {
-      await models.userToRole.create({
-        data: { userId: id, roleId },
-      });
-    }
-
-    await models.userToPermission.deleteMany({ where: { userId: id } });
-    for (const permissionId of permissionIdsArr) {
-      await models.userToPermission.create({
-        data: { userId: id, permissionId },
-      });
-    }
+    // IRW-FIX-052: khóa user thì thu hồi phiên; còn lại chỉ bỏ cache quyền.
+    if (status && status !== "ACTIVE") await revokeUserSessions(id);
+    else invalidateUserPermissions(id);
 
     const user = await models.user.findFirst({
       where: { id },
@@ -200,6 +203,7 @@ export class ApiV1AdminUserController extends ApiV1Controller {
       where: { id },
       data: { deleted: true },
     });
+    await revokeUserSessions(id);
     this.renderJson({ deleted: true });
   }
 }

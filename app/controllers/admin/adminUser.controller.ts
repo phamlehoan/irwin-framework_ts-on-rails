@@ -2,6 +2,14 @@ import { FlashType } from "@configs/enum";
 import { Prisma } from "@db";
 import models from "@models";
 import {
+  invalidateUserPermissions,
+  normalizeEmail,
+  replaceUserPermissions,
+  replaceUserRoles,
+  revokeUserSessions,
+  withTransaction,
+} from "@lib/utils";
+import {
   CreateUserValidator,
   UpdateUserValidator,
 } from "@validators/admin.validator";
@@ -183,36 +191,31 @@ export class AdminUserController extends AdminController {
     const roleIdsArr = roleIds ?? [];
     const permissionIdsArr = permissionIds ?? [];
 
-    if (!section || section === "personal") {
-      const personalData: Prisma.UserUpdateInput = {};
-      if (firstName !== undefined) personalData.firstName = firstName;
-      if (lastName !== undefined) personalData.lastName = lastName;
-      if (email !== undefined) personalData.email = email;
-      if (status !== undefined) personalData.status = status;
-      if (phoneNumber !== undefined) personalData.phoneNumber = phoneNumber;
-      if (address !== undefined) personalData.address = address;
-      if (Object.keys(personalData).length) {
-        await models.user.update({ where: { id }, data: personalData });
+    // IRW-FIX-059: các phần cập nhật nằm trong một transaction để lỗi giữa chừng không làm mất quyền.
+    await withTransaction(async (tx) => {
+      if (!section || section === "personal") {
+        const personalData: Prisma.UserUpdateInput = {};
+        if (firstName !== undefined) personalData.firstName = firstName;
+        if (lastName !== undefined) personalData.lastName = lastName;
+        if (email !== undefined) personalData.email = normalizeEmail(email);
+        if (status !== undefined) personalData.status = status;
+        if (phoneNumber !== undefined) personalData.phoneNumber = phoneNumber;
+        if (address !== undefined) personalData.address = address;
+        if (Object.keys(personalData).length) {
+          await tx.user.update({ where: { id }, data: personalData });
+        }
       }
-    }
+      if (section === "roles" || !section) {
+        await replaceUserRoles(tx, id, roleIdsArr);
+      }
+      if (section === "permissions" || !section) {
+        await replaceUserPermissions(tx, id, permissionIdsArr);
+      }
+    });
 
-    if (section === "roles" || !section) {
-      await models.userToRole.deleteMany({ where: { userId: id } });
-      for (const roleId of roleIdsArr) {
-        await models.userToRole.create({
-          data: { userId: id, roleId },
-        });
-      }
-    }
-
-    if (section === "permissions" || !section) {
-      await models.userToPermission.deleteMany({ where: { userId: id } });
-      for (const permissionId of permissionIdsArr) {
-        await models.userToPermission.create({
-          data: { userId: id, permissionId },
-        });
-      }
-    }
+    // IRW-FIX-052: khóa user thì thu hồi phiên; còn lại chỉ bỏ cache quyền.
+    if (status !== undefined && status !== "ACTIVE") await revokeUserSessions(id);
+    else invalidateUserPermissions(id);
 
     this.flash(FlashType.Success, { msg: this.t("flash.user_updated") });
     this.redirect(`/admin/users/${id}`);
@@ -224,6 +227,7 @@ export class AdminUserController extends AdminController {
       where: { id },
       data: { deleted: true },
     });
+    await revokeUserSessions(id);
     this.flash(FlashType.Success, {
       msg: this.t("flash.user_deleted_success"),
     });

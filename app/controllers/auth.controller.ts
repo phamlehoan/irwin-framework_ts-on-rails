@@ -1,9 +1,22 @@
 import { FlashType } from "@configs/enum";
 import env from "@configs/env";
 import { Prisma } from "@db";
-import { generateToken, verifyToken } from "@lib";
+import {
+  consumeOAuthState,
+  establishSession,
+  generateToken,
+  newJti,
+  newOAuthState,
+  normalizeEmail,
+  passwordFingerprint,
+  registrationEnabled,
+  revokeUserSessions,
+  validatePassword,
+  verifyToken,
+} from "@lib";
 import { UserMailer } from "@mailers";
 import models, { PasswordType, UserStatus } from "@models";
+import { PASSWORD_RESET_PURPOSE } from "@services/auth/authPasswordReset.service";
 import {
   CreatePasswordValidator,
   LoginValidator,
@@ -25,13 +38,23 @@ export type GoogleUser = {
 
 export class AuthController extends ApplicationController {
   async loginWithGoogle() {
-    this.redirect(
-      `https://accounts.google.com/o/oauth2/v2/auth?client_id=${env.googleClientId}&redirect_uri=${env.googleRedirectUri}&response_type=code&scope=profile email`,
-    );
+    // IRW-FIX-054: `state` ngẫu nhiên gắn với session chống CSRF đăng nhập; tham số được mã hóa URL.
+    const params = new URLSearchParams({
+      client_id: env.googleClientId,
+      redirect_uri: env.googleRedirectUri,
+      response_type: "code",
+      scope: "profile email",
+      state: newOAuthState(this.req),
+    });
+    this.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
   }
 
   async loginWithGoogleRedirect() {
-    const { code } = this.req.query;
+    const { code, state } = this.req.query;
+    if (!consumeOAuthState(this.req, state)) {
+      this.flash(FlashType.Errors, { msg: this.t("flash.invalid_token") });
+      return this.redirect("/auth");
+    }
     const {
       data: { access_token },
     } = await axios.post("https://oauth2.googleapis.com/token", {
@@ -51,29 +74,31 @@ export class AuthController extends ApplicationController {
       },
     )) as { data: GoogleUser };
 
+    // IRW-FIX-054: chỉ tin email Google đã xác minh; email chuẩn hóa.
+    const googleEmail = normalizeEmail(googleUser.email);
+    if (!googleEmail || googleUser.verified_email !== true) {
+      this.flash(FlashType.Errors, { msg: this.t("flash.user_not_found") });
+      return this.redirect("/auth");
+    }
     const loginUser = await models.user.findUnique({
-      where: { email: googleUser.email },
+      where: { email: googleEmail },
     });
 
     if (!loginUser) {
+      if (!registrationEnabled()) {
+        this.flash(FlashType.Errors, { msg: this.t("flash.user_not_found") });
+        return this.redirect("/auth");
+      }
       const newUser = await models.user.create({
         data: {
           firstName: googleUser.given_name,
           lastName: googleUser.family_name,
-          email: googleUser.email,
+          email: googleEmail,
           avatarUrl: googleUser.picture,
           googleId: googleUser.id,
         },
       });
-      this.req.session!.userId = newUser.id;
-      this.req.session!.save((err) => {
-        // Nếu anh muốn dùng Token thay vì Session, anh có thể trả về JSON tại đây
-        // const tokens = this.generateAuthTokens(newUser.id);
-        if (err) return this.redirect("/auth");
-        this.flash(FlashType.Success, { msg: this.t("flash.login_success") });
-        this.redirect("/");
-      });
-      return;
+      return this.finishLogin(newUser.id);
     }
     if (loginUser.deleted) {
       this.flash(FlashType.Errors, { msg: this.t("flash.user_deleted") });
@@ -95,20 +120,23 @@ export class AuthController extends ApplicationController {
       data: {
         firstName: googleUser.given_name,
         lastName: googleUser.family_name,
-        email: googleUser.email,
+        email: googleEmail,
         avatarUrl: googleUser.picture,
         googleId: loginUser.googleId ? loginUser.googleId : googleUser.id,
       },
     });
-    this.req.session!.userId = loginUser.id;
+    return this.finishLogin(loginUser.id);
+  }
 
-    // const tokens = this.generateAuthTokens(loginUser.id);
-
-    this.req.session!.save((err) => {
-      if (err) return this.redirect("/auth");
-      this.flash(FlashType.Success, { msg: this.t("flash.login_success") });
-      this.redirect("/");
-    });
+  /** Sinh lại session (chống fixation, IRW-FIX-055) rồi đặt flash và chuyển trang. */
+  private async finishLogin(userId: string) {
+    try {
+      await establishSession(this.req, userId);
+    } catch {
+      return this.redirect("/auth");
+    }
+    this.flash(FlashType.Success, { msg: this.t("flash.login_success") });
+    this.redirect("/");
   }
 
   async index() {
@@ -124,7 +152,7 @@ export class AuthController extends ApplicationController {
 
     const user = await models.user.findFirst({
       where: {
-        email,
+        email: normalizeEmail(email),
         status: UserStatus.ACTIVE,
         deleted: false,
       },
@@ -142,17 +170,7 @@ export class AuthController extends ApplicationController {
       user.passwords.length > 0 &&
       (await Security.verifyPassword(password, user.passwords[0].password))
     ) {
-      this.req.session!.userId = user.id;
-      // const tokens = this.generateAuthTokens(user.id);
-
-      this.req.session!.save((err) => {
-        if (err) {
-          this.flash(FlashType.Errors, { msg: this.t("flash.user_not_found") });
-          return this.redirect("/auth");
-        }
-        this.flash(FlashType.Success, { msg: this.t("flash.login_success") });
-        this.redirect("/");
-      });
+      return this.finishLogin(user.id);
     } else {
       this.flash(FlashType.Errors, { msg: this.t("flash.user_not_found") });
       return this.redirect("/auth");
@@ -176,19 +194,36 @@ export class AuthController extends ApplicationController {
 
     const user = await models.user.findUnique({
       where: {
-        email,
+        email: normalizeEmail(email),
         status: UserStatus.ACTIVE,
         deleted: false,
       },
     });
 
     if (!user) {
-      this.flash(FlashType.Errors, { msg: this.t("flash.user_not_found") });
-      return this.render("auth.view/new");
+      // Phản hồi trung tính: không lộ email có tồn tại hay không (IRW-FIX-057).
+      this.flash(FlashType.Success, { msg: this.t("flash.reset_password_sent") });
+      return this.redirect("/auth");
     }
 
     // Tạo JWT token tạm thời có hiệu lực trong 15 phút
-    const resetToken = generateToken({ id: user.id, email: user.email }, "15m");
+    // `purpose` ngăn token này dùng làm access token; verify bên dưới cũng bắt buộc purpose.
+    // IRW-FIX-056: gắn dấu vân tay mật khẩu (`pv`) để link chỉ dùng một lần.
+    const currentPw = await models.password.findFirst({
+      where: { userId: user.id, deleted: false, type: PasswordType.PASSWORD },
+      orderBy: { createdAt: "desc" },
+      select: { password: true },
+    });
+    const resetToken = generateToken(
+      {
+        id: user.id,
+        email: user.email,
+        purpose: PASSWORD_RESET_PURPOSE,
+        jti: newJti(),
+        pv: passwordFingerprint(currentPw?.password ?? null),
+      },
+      "15m",
+    );
     const protocol = this.req.protocol;
     const host = this.req.get("host");
     const baseUrl = env.appUrl || `${protocol}://${host}`;
@@ -222,7 +257,7 @@ export class AuthController extends ApplicationController {
     if (!this.req.user || !this.req.session!.userId) {
       try {
         const decoded = verifyToken(token);
-        if (decoded.email !== email) {
+        if (decoded.purpose !== PASSWORD_RESET_PURPOSE || decoded.email !== email) {
           this.flash(FlashType.Errors, { msg: this.t("flash.user_not_found") });
           return this.redirect("/auth");
         }
@@ -269,7 +304,7 @@ export class AuthController extends ApplicationController {
         "oldPassword",
         "token",
       );
-    const email = this.req.params.id;
+    const email = normalizeEmail(this.req.params.id);
 
     // Phải có hoặc oldPassword (đang logged in) hoặc token (quên mật khẩu)
     if (!oldPassword && !token) {
@@ -296,14 +331,30 @@ export class AuthController extends ApplicationController {
       // Verify token và kiểm tra tính hợp lệ của User ID
       try {
         const decoded = verifyToken(token);
+        if (decoded.purpose !== PASSWORD_RESET_PURPOSE) {
+          throw new Error("Not a password reset token");
+        }
         if (decoded.id !== user.id) throw new Error("User mismatch");
+        // IRW-FIX-056: link có `pv` chỉ dùng được khi mật khẩu chưa đổi kể từ lúc phát.
+        const pv = (decoded as { pv?: string }).pv;
+        if (pv !== undefined) {
+          const cur = await models.password.findFirst({
+            where: { userId: user.id, deleted: false, type: PasswordType.PASSWORD },
+            orderBy: { createdAt: "desc" },
+            select: { password: true },
+          });
+          if (passwordFingerprint(cur?.password ?? null) !== pv) {
+            throw new Error("Reset link already used");
+          }
+        }
       } catch (err) {
         this.flash(FlashType.Errors, { msg: this.t("flash.invalid_token") });
         return this.redirect(`/auth/${email}/edit?token=${token}`);
       }
     } else if (oldPassword) {
       const currentPwd = await models.password.findFirst({
-        where: { userId: user.id, deleted: false },
+        where: { userId: user.id, deleted: false, type: PasswordType.PASSWORD },
+        orderBy: { createdAt: "desc" },
       });
       const isMatch = currentPwd
         ? await Security.verifyPassword(
@@ -330,6 +381,12 @@ export class AuthController extends ApplicationController {
       return this.redirect(`/auth/${email}/edit`);
     }
 
+    const pwProblem = validatePassword(password);
+    if (pwProblem) {
+      this.flash(FlashType.Errors, { msg: pwProblem });
+      return this.redirect(`/auth/${email}/edit`);
+    }
+
     await models.user.update({
       where: { id: user.id },
       data: {
@@ -344,6 +401,8 @@ export class AuthController extends ApplicationController {
         },
       },
     });
+    // Đổi mật khẩu thì mọi refresh token cũ không còn giá trị (IRW-FIX-052/056).
+    await revokeUserSessions(user.id);
 
     this.flash(FlashType.Success, {
       msg: this.t("flash.password_changed_relogin"),

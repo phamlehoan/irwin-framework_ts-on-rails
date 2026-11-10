@@ -17,10 +17,11 @@ export class ApplicationMiddleware {
     id: string,
     isGetPermission = false,
   ): Promise<(User & { features?: string[]; permissions?: string[] }) | null> {
-    const user = await models.user.findUnique({
-      where: {
-        id,
-      },
+    // IRW-FIX-052: user bị xóa mềm hoặc không ACTIVE không được dựng thành `req.user`,
+    // nên token còn hạn của họ vô dụng. Cờ quay lại hành vi cũ: AUTH_ALLOW_INACTIVE_USERS=true.
+    const allowInactive = process.env.AUTH_ALLOW_INACTIVE_USERS === "true";
+    const user = await models.user.findFirst({
+      where: allowInactive ? { id } : { id, deleted: false, status: "ACTIVE" },
     });
 
     if (user && isGetPermission) {

@@ -1,71 +1,41 @@
-import { PasswordType, UserStatus } from "@models";
-import { generateToken, verifyToken } from "@lib";
+import { UserStatus } from "@models";
+import {
+  consumeRefreshToken,
+  generateAccessToken,
+  issueRefreshToken,
+} from "@lib";
 import { UnauthorizedError } from "ts-rails";
 import { ApplicationService } from "../application.service";
 
+const INVALID = "Refresh token is not valid or has been revoked.";
+
 export class AuthRefreshTokenService extends ApplicationService {
   async execute(refreshToken: string) {
-    // 1. Verify chữ ký và thời hạn của JWT
-    // Nếu token hết hạn hoặc sai format, hàm verifyToken sẽ throw lỗi (thường là 401)
-    const decoded = verifyToken(refreshToken);
-    const userId = decoded.id;
-    if (!userId) {
-      throw new UnauthorizedError("Refresh token is not valid.");
+    // IRW-FIX-056: token lưu dạng băm, xoay vòng một lần; dùng lại token đã xoay hủy toàn bộ phiên của user.
+    // consumeRefreshToken cũng từ chối access / invite / reset token (IRW-FIX-048).
+    let userId: string;
+    try {
+      userId = await consumeRefreshToken(refreshToken);
+    } catch {
+      throw new UnauthorizedError(INVALID);
     }
 
-    // 2. Tìm token trong database
-    // Phải khớp: chuỗi token, type REFRESH_TOKEN và chưa bị xóa (deleted: false)
-    const storedToken = await this.models.password.findFirst({
-      where: {
-        userId,
-        password: refreshToken,
-        type: PasswordType.REFRESH_TOKEN,
-        deleted: false,
-      },
-      include: {
-        user: {
-          include: {
-            roles: { include: { role: true } },
-          },
-        },
-      },
+    const user = await this.models.user.findFirst({
+      where: { id: userId },
+      include: { roles: { include: { role: true } } },
     });
-
-    if (!storedToken || !storedToken.user) {
-      throw new UnauthorizedError(
-        "Refresh token is not valid or has been revoked.",
-      );
-    }
-
-    const user = storedToken.user;
-    if (user.deleted || user.status !== UserStatus.ACTIVE) {
-      throw new UnauthorizedError("Refresh token is not valid or has been revoked.");
+    if (!user || user.deleted || user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedError(INVALID);
     }
     const userRoles = user.roles.map(
       (r: { role: { code: string } }) => r.role.code,
     );
 
-    // 3. Tạo cặp Token mới
-    const newAccessToken = generateToken(
+    const newAccessToken = generateAccessToken(
       { id: user.id, roles: userRoles },
       "1h",
     );
-    const newRefreshToken = generateToken({ id: user.id }, "7d");
-
-    // 4. Cập nhật Database (Rotation Strategy)
-    // Xóa token cũ và lưu token mới trong một Transaction
-    await this.models.$transaction([
-      this.models.password.delete({
-        where: { id: storedToken.id },
-      }),
-      this.models.password.create({
-        data: {
-          userId: user.id,
-          password: newRefreshToken,
-          type: PasswordType.REFRESH_TOKEN,
-        },
-      }),
-    ]);
+    const newRefreshToken = await issueRefreshToken(user.id);
 
     return {
       accessToken: newAccessToken,

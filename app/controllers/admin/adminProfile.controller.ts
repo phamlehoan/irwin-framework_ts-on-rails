@@ -1,5 +1,10 @@
 import { FlashType } from "@configs/enum";
 import models from "@models";
+import {
+  invalidateUserPermissions,
+  replaceUserRoles,
+  withTransaction,
+} from "@lib/utils";
 import { UpdateProfileValidator } from "@validators/profile.validator";
 import { AdminController } from "./admin.controller";
 
@@ -59,12 +64,12 @@ export class AdminProfileController extends AdminController {
       },
     });
 
-    const roleIds = toArray(this.req.body?.roleIds);
-    await models.userToRole.deleteMany({ where: { userId } });
-    for (const roleId of roleIds) {
-      await models.userToRole.create({
-        data: { userId, roleId },
-      });
+    // Bảo mật: người dùng không được tự gán vai trò cho mình qua trang hồ sơ (leo thang đặc quyền).
+    // Hành vi cũ chỉ bật lại khi đặt PROFILE_SELF_ROLE_EDIT=true (không khuyến nghị).
+    if (process.env.PROFILE_SELF_ROLE_EDIT === "true") {
+      const roleIds = toArray(this.req.body?.roleIds);
+      await withTransaction((tx) => replaceUserRoles(tx, userId, roleIds));
+      invalidateUserPermissions(userId);
     }
 
     this.flash(FlashType.Success, { msg: this.t("flash.profile_updated") });

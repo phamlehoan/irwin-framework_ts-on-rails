@@ -37,6 +37,32 @@ const databaseUrl = isServerlessDeployedBundle()
     : explicitDatabaseUrl ||
       (tursoDatabaseUrl ? "" : "file:./database/app.db");
 
+/** Placeholder secrets shipped as defaults. They are public, so they must never sign anything outside local dev/test. */
+const INSECURE_SECRETS = new Set([
+  "",
+  "your-session-secret",
+  "your-jwt-secret",
+  "fallback_secret",
+  "changeme",
+  "secret",
+]);
+const DEV_LIKE_ENVS = new Set(["development", "dev", "local", "test"]);
+const MIN_SECRET_LENGTH = 16;
+
+/**
+ * Fails fast when a signing secret is unset, a known placeholder, or too short in any
+ * environment other than development/test (where the placeholder default stays usable).
+ */
+export function assertStrongSecret(name: string, value: string): void {
+  if (DEV_LIKE_ENVS.has(appEnv.toLowerCase())) return;
+  if (INSECURE_SECRETS.has(value.trim()) || value.trim().length < MIN_SECRET_LENGTH) {
+    throw new Error(
+      `${name} is missing, a placeholder, or shorter than ${MIN_SECRET_LENGTH} characters. ` +
+        `Set a strong random value (e.g. \`openssl rand -hex 32\`) when running with APP_ENV/NODE_ENV="${appEnv}".`,
+    );
+  }
+}
+
 export default {
   search: process.env.SEARCH,
   nodeEnv,

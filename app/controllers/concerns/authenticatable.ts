@@ -1,3 +1,4 @@
+import { isApiRequest } from "@lib/utils/http";
 import { FlashType } from "@configs/enum";
 import type { ApplicationController } from "../application.controller";
 
@@ -20,7 +21,7 @@ export const Authenticatable = {
    */
   authenticateUser(this: ApplicationController): boolean {
     if (!this.currentUser) {
-      if (this.req.originalUrl.includes("/api")) {
+      if (isApiRequest(this.req)) {
         this.res
           .status(401)
           .json({ success: false, error: this.t("flash.login_first") });
